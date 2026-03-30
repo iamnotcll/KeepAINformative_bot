@@ -7,5 +7,5 @@ services:
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         value: "8655208949:AAF9pYe3QpGiuf0U0a4_6Aeb6m6vKBh2-uw"
-      - key: NEWSDATA_API_KEY
-        value: "pub_20d2b872f1eb490386bf0b4771099525"
+      - key: OPENAI_API_KEY
+        value: "sk-rizvilrtphnzdusxuldevvueensntaqjzcubsusymxeumxdo"

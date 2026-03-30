@@ -3,9 +3,16 @@ import sys
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
+import threading
+import time
 
 import requests
 import telebot
+import feedparser
+from bs4 import BeautifulSoup
+from flask import Flask
+from apscheduler.schedulers.background import BackgroundScheduler
+from openai import OpenAI
 
 print(f"Python version: {sys.version}")
 
@@ -16,150 +23,231 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "sk-rizvilrtphnzdusxuldevvueensntaqjzcubsusymxeumxdo")
 
-NEWS_API_URL = "https://newsdata.io/api/1/latest"
-
-AI_KEYWORDS = (
-    '"AI" OR "artificial intelligence" OR "machine learning" OR '
-    '"LLM" OR "GPT" OR "OpenAI" OR "Claude" OR "Gemini" OR '
-    '"neural network" OR "deep learning" OR "AGI" OR "generative AI"'
-)
+AI_RSS_FEEDS = [
+    "https://feeds.feedburner.com/TechCrunch/",
+    "https://www.theverge.com/rss/index.xml",
+    "https://wired.com/feed/rss",
+    "https://www.engadget.com/rss.xml",
+]
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
+app = Flask(__name__)
 
-def fetch_ai_news(max_results: int = 20) -> List[Dict[str, Any]]:
-    params = {
-        "apikey": NEWSDATA_API_KEY,
-        "q": "artificial intelligence OR AI OR machine learning",
-        "language": "en",
-    }
-    
-    print(f"API params: {params}")
-    
-    try:
-        response = requests.get(NEWS_API_URL, params=params, timeout=30)
-        print(f"API response status: {response.status_code}")
-        data = response.json()
-        print(f"API response: {data}")
-    except Exception as e:
-        logger.error(f"API request failed: {e}")
-        print(f"API request failed: {e}")
-        return []
-    
-    if data.get("status") not in ("ok", "success"):
-        logger.error(f"API error: {data}")
-        print(f"API error: {data}")
-        return []
-    
-    return data.get("results", [])
+user_chat_ids = set()
+
+scheduler = BackgroundScheduler()
+
+client = OpenAI(
+    api_key=OPENAI_API_KEY,
+    base_url="https://api.siliconflow.cn/v1"
+)
 
 
-def calculate_relevance_score(article: Dict[str, Any]) -> float:
-    score = 0.0
+def fetch_rss_news():
+    articles = []
     
-    source_priority = article.get("source_priority", 50)
-    score += source_priority * 0.5
-    
-    if article.get("image_url"):
-        score += 15
-    
-    if article.get("video_url"):
-        score += 20
-    
-    if article.get("content"):
-        score += 10
-    if article.get("description"):
-        score += 5
-    
-    pub_date = article.get("pubDate", "")
-    if pub_date:
+    for feed_url in AI_RSS_FEEDS:
         try:
-            article_date = datetime.fromisoformat(pub_date.replace("Z", "+00:00"))
-            hours_ago = (datetime.now(article_date.tzinfo) - article_date).total_seconds() / 3600
-            if hours_ago < 3:
-                score += 10
-            elif hours_ago < 6:
-                score += 5
-        except:
-            pass
+            feed = feedparser.parse(feed_url)
+            for entry in feed.entries[:5]:
+                article = {
+                    "title": entry.get("title", "No title"),
+                    "link": entry.get("link", ""),
+                    "description": entry.get("summary", entry.get("description", "")),
+                    "published": entry.get("published", ""),
+                    "source": feed.feed.get("title", "Unknown")
+                }
+                articles.append(article)
+        except Exception as e:
+            logger.error(f"RSS error: {e}")
+            print(f"RSS error: {e}")
     
-    return score
+    return articles
 
 
-def rank_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    for article in articles:
-        article["relevance_score"] = calculate_relevance_score(article)
+def scrape_article_content(url: str) -> str:
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        for script in soup(["script", "style", "nav", "footer", "header"]):
+            script.decompose()
+        
+        text = soup.get_text(separator="\n", strip=True)
+        
+        lines = [line.strip() for line in text.split("\n")]
+        text = "\n".join([line for line in lines if line])
+        
+        return text[:2000]
     
-    return sorted(articles, key=lambda x: x["relevance_score"], reverse=True)
-
-
-def truncate_content(content: str, max_length: int = 100) -> str:
-    if not content:
+    except Exception as e:
+        logger.error(f"Scraper error: {e}")
+        print(f"Scraper error: {e}")
         return ""
-    
-    content = " ".join(content.split())
-    
-    if len(content) <= max_length:
-        return content
-    
-    truncated = content[:max_length].rsplit(" ", 1)[0]
-    return truncated + "..."
 
 
-def format_news_message(articles: List[Dict[str, Any]], limit: int = 10) -> str:
+def translate_and_analyze(title: str, content: str) -> Dict[str, str]:
+    prompt = f"""你是一个专业的AI新闻分析师。请完成以下任务：
+
+1. 将以下新闻标题翻译成中文
+2. 分析这条新闻对以下三个群体的影响（每个不超过100字）：
+   - 对AI相关股市的影响
+   - 对AI学习者的影响  
+   - 对AI行业从业者的影响
+
+新闻标题：{title}
+新闻内容：{content[:1000]}
+
+请用以下格式回复：
+翻译：[中文标题]
+
+股市影响：[分析]
+学习影响：[分析]
+从业影响：[分析]
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="Qwen/Qwen2.5-7B-Instruct",
+            messages=[
+                {"role": "system", "content": "你是一个专业的AI新闻分析师。"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=500
+        )
+        
+        result = response.choices[0].message.content
+        print(f"LLM result: {result}")
+        
+        lines = result.strip().split("\n")
+        translation = ""
+        stock_impact = ""
+        learner_impact = ""
+        practitioner_impact = ""
+        
+        for line in lines:
+            if line.startswith("翻译："):
+                translation = line[3:].strip()
+            elif line.startswith("股市影响："):
+                stock_impact = line[5:].strip()
+            elif line.startswith("学习影响："):
+                learner_impact = line[5:].strip()
+            elif line.startswith("从业影响："):
+                practitioner_impact = line[5:].strip()
+        
+        return {
+            "translation": translation,
+            "stock_impact": stock_impact,
+            "learner_impact": learner_impact,
+            "practitioner_impact": practitioner_impact
+        }
+    
+    except Exception as e:
+        logger.error(f"LLM error: {e}")
+        print(f"LLM error: {e}")
+        return {
+            "translation": title,
+            "stock_impact": "",
+            "learner_impact": "",
+            "practitioner_impact": ""
+        }
+
+
+def fetch_ai_news_with_content(max_results: int = 10) -> List[Dict[str, Any]]:
+    articles = fetch_rss_news()
+    
+    for article in articles:
+        content = scrape_article_content(article["link"])
+        article["content"] = content or article.get("description", "")
+        
+        analysis = translate_and_analyze(article["title"], article["content"])
+        article.update(analysis)
+    
+    return articles[:max_results]
+
+
+def format_news_message(articles: List[Dict[str, Any]]) -> str:
     if not articles:
         return "No AI news found. Please try again later."
     
-    ranked = rank_articles(articles)[:limit]
+    message = "AI News \n"
+    message += "=" * 40 + "\n\n"
     
-    message = "Todays AI News\n"
-    message += "--------------------------------\n\n"
-    
-    for i, article in enumerate(ranked, 1):
+    for i, article in enumerate(articles, 1):
         title = article.get("title", "No title")
-        title = title.replace("*", "").replace("_", "").replace("`", "")
+        translation = article.get("translation", title)
         
-        content = article.get("content") or article.get("description") or ""
-        summary = truncate_content(content, 100)
+        content = article.get("content", "")
+        if len(content) > 200:
+            content = content[:200] + "..."
         
-        source = article.get("source_name", article.get("source_id", "Unknown"))
+        stock = article.get("stock_impact", "")
+        learner = article.get("learner_impact", "")
+        practitioner = article.get("practitioner_impact", "")
         
-        pub_date = article.get("pubDate", "")
-        if pub_date:
-            try:
-                article_date = datetime.fromisoformat(pub_date.replace("Z", "+00:00"))
-                time_str = article_date.strftime("%H:%M")
-            except:
-                time_str = ""
-        else:
-            time_str = ""
+        source = article.get("source", "Unknown")
         
-        message += f"[{i}] {title}\n"
-        if summary:
-            message += f"   {summary}\n"
-        message += f"   {source}"
-        if time_str:
-            message += f" - {time_str}"
-        message += "\n\n"
+        message += f"【{i}】{translation}\n"
+        message += f"原文: {title}\n\n"
+        
+        if content:
+            message += f": {content}\n\n"
+        
+        if stock:
+            message += f": {stock}\n"
+        if learner:
+            message += f": {learner}\n"
+        if practitioner:
+            message += f": {practitioner}\n"
+        
+        message += f": {source}\n"
+        message += "-" * 40 + "\n\n"
     
-    message += "--------------------------------\n"
-    message += "/ai - Refresh news"
+    message += "/ai - \n"
+    message += "/subscribe - \n"
+    message += "/unsubscribe - "
     
     return message
 
 
+def daily_push():
+    if not user_chat_ids:
+        return
+    
+    try:
+        articles = fetch_ai_news_with_content(max_results=5)
+        message = format_news_message(articles)
+        
+        for chat_id in user_chat_ids:
+            try:
+                bot.send_message(chat_id, message)
+            except Exception as e:
+                logger.error(f"Push error: {e}")
+    except Exception as e:
+        logger.error(f"Daily push error: {e}")
+
+
+scheduler.add_job(daily_push, 'cron', hour=10, minute=0)
+
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    user_chat_ids.add(message.chat.id)
     welcome_text = (
         "Welcome to AI News Bot!\n\n"
-        "I fetch the latest AI news from around the world, "
-        "ranked by popularity and influence.\n\n"
         "Commands:\n"
         "- /ai - Get latest AI news\n"
-        "- /help - Show this help\n\n"
-        "Let's go!"
+        "- /subscribe - Daily push at 10:00\n"
+        "- /unsubscribe - Cancel\n"
     )
     bot.reply_to(message, welcome_text)
 
@@ -167,77 +255,73 @@ def send_welcome(message):
 @bot.message_handler(commands=['help'])
 def send_help(message):
     help_text = (
-        "Help\n"
-        "- /ai - Fetch latest AI news (last 12 hours)\n"
-        "- /start - Welcome message\n"
-        "- /help - Show this help\n\n"
-        "News is ranked by source credibility, content engagement, and recency.\n"
-        "Each news item is summarized to 100 characters."
+        "Commands:\n"
+        "- /ai - Get AI news with LLM analysis\n"
+        "- /subscribe - Daily push\n"
+        "- /unsubscribe - Cancel\n"
     )
     bot.reply_to(message, help_text)
 
 
 @bot.message_handler(commands=['ai'])
 def send_ai_news(message):
+    bot.reply_to(message, "Fetching AI news with LLM analysis...")
+    
     try:
-        bot.reply_to(message, "Fetching latest AI news...")
-        
-        articles = fetch_ai_news(max_results=20)
-        
-        message_text = format_news_message(articles, limit=10)
+        articles = fetch_ai_news_with_content(max_results=5)
+        message_text = format_news_message(articles)
         bot.reply_to(message, message_text)
         
     except Exception as e:
-        logger.error(f"Error in /ai command: {e}")
-        try:
-            bot.reply_to(message, "Error fetching news. Please try again later.")
-        except:
-            pass
+        logger.error(f"Error: {e}")
+        bot.reply_to(message, "Error. Try again later.")
+
+
+@bot.message_handler(commands=['subscribe'])
+def subscribe(message):
+    user_chat_ids.add(message.chat.id)
+    bot.reply_to(message, "Subscribed! Daily at 10:00 AM.")
+
+
+@bot.message_handler(commands=['unsubscribe'])
+def unsubscribe(message):
+    user_chat_ids.discard(message.chat.id)
+    bot.reply_to(message, "Unsubscribed.")
 
 
 @bot.message_handler(func=lambda m: True)
 def echo_message(message):
-    bot.reply_to(message, "I only understand commands. Try /ai to get AI news!")
+    bot.reply_to(message, "Try /ai")
+
+
+def run_bot():
+    while True:
+        try:
+            bot.infinity_polling(timeout=60, long_polling_timeout=60)
+        except Exception as e:
+            logger.error(f"Polling error: {e}")
+            time.sleep(5)
+
+
+@app.route('/')
+def home():
+    return 'AI News Bot is running!'
+
+
+@app.route('/health')
+def health():
+    return 'OK'
 
 
 def main():
-    from flask import Flask
-    import threading
-    
-    app = Flask(__name__)
-    
-    @app.route('/')
-    def home():
-        return 'AI News Bot is running!'
-    
-    @app.route('/health')
-    def health():
-        return 'OK'
-    
     print("Starting AI News Bot...")
-    print(f"Python: {sys.version}")
-    print(f"TELEGRAM_BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}")
-    print(f"NEWSDATA_API_KEY set: {bool(NEWSDATA_API_KEY)}")
     
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not set!")
-        print("Error: Please set TELEGRAM_BOT_TOKEN environment variable")
         sys.exit(1)
     
-    if not NEWSDATA_API_KEY:
-        logger.error("NEWSDATA_API_KEY not set!")
-        print("Error: Please set NEWSDATA_API_KEY environment variable")
-        sys.exit(1)
-    
-    def run_bot():
-        while True:
-            try:
-                bot.infinity_polling(timeout=60, long_polling_timeout=60)
-            except Exception as e:
-                logger.error(f"Polling error: {e}")
-                print(f"Polling error: {e}")
-                import time
-                time.sleep(5)
+    scheduler.start()
+    print("Scheduler: daily 10:00 AM")
     
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
