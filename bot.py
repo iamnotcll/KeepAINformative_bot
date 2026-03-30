@@ -205,6 +205,19 @@ def echo_message(message):
 
 
 def main():
+    from flask import Flask
+    import threading
+    
+    app = Flask(__name__)
+    
+    @app.route('/')
+    def home():
+        return 'AI News Bot is running!'
+    
+    @app.route('/health')
+    def health():
+        return 'OK'
+    
     print("Starting AI News Bot...")
     print(f"Python: {sys.version}")
     print(f"TELEGRAM_BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}")
@@ -220,17 +233,23 @@ def main():
         print("Error: Please set NEWSDATA_API_KEY environment variable")
         sys.exit(1)
     
+    def run_bot():
+        while True:
+            try:
+                bot.infinity_polling(timeout=60, long_polling_timeout=60)
+            except Exception as e:
+                logger.error(f"Polling error: {e}")
+                print(f"Polling error: {e}")
+                import time
+                time.sleep(5)
+    
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    
     logger.info("Bot started!")
     print("Bot is running...")
     
-    while True:
-        try:
-            bot.infinity_polling(timeout=60, long_polling_timeout=60)
-        except Exception as e:
-            logger.error(f"Polling error: {e}")
-            print(f"Polling error: {e}")
-            import time
-            time.sleep(5)
+    app.run(host='0.0.0.0', port=10000)
 
 
 if __name__ == "__main__":
