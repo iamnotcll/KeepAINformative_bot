@@ -31,22 +31,22 @@ bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
 def fetch_ai_news(max_results: int = 20) -> List[Dict[str, Any]]:
     now = datetime.now()
-    from_date = (now - timedelta(hours=12)).strftime("%Y-%m-%d")
+    from_date = (now - timedelta(hours=24)).strftime("%Y-%m-%d")
     
     params = {
         "apikey": NEWSDATA_API_KEY,
-        "category": "technology",
-        "q": AI_KEYWORDS,
+        "q": "AI",
         "language": "en",
-        "country": "us,gb,ca,au",
-        "from_date": from_date,
         "size": max_results,
     }
     
+    print(f"API params: {params}")
+    
     try:
         response = requests.get(NEWS_API_URL, params=params, timeout=30)
-        response.raise_for_status()
+        print(f"API response status: {response.status_code}")
         data = response.json()
+        print(f"API response: {data}")
     except Exception as e:
         logger.error(f"API request failed: {e}")
         print(f"API request failed: {e}")
