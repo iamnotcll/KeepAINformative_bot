@@ -30,14 +30,10 @@ bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
 
 def fetch_ai_news(max_results: int = 20) -> List[Dict[str, Any]]:
-    now = datetime.now()
-    from_date = (now - timedelta(hours=24)).strftime("%Y-%m-%d")
-    
     params = {
         "apikey": NEWSDATA_API_KEY,
-        "q": "AI",
+        "q": "artificial intelligence OR AI OR machine learning",
         "language": "en",
-        "size": max_results,
     }
     
     print(f"API params: {params}")
