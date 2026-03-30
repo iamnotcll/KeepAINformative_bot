@@ -1,11 +1,15 @@
 import os
+import sys
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
 import requests
+import telegram
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+
+print(f"Python version: {sys.version}")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -26,8 +30,6 @@ AI_KEYWORDS = (
 
 
 def fetch_ai_news(max_results: int = 20) -> List[Dict[str, Any]]:
-    from datetime import datetime, timedelta
-    
     now = datetime.now()
     from_date = (now - timedelta(hours=12)).strftime("%Y-%m-%d")
     
@@ -152,7 +154,7 @@ def format_news_message(articles: List[Dict[str, Any]], limit: int = 10) -> str:
     return message
 
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start_command(update: Update, context):
     welcome_text = (
         "Welcome to AI News Bot!\n\n"
         "I fetch the latest AI news from around the world, "
@@ -162,10 +164,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- /help - Show this help\n\n"
         "Let's go!"
     )
-    await update.message.reply_text(welcome_text)
+    update.message.reply_text(welcome_text)
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def help_command(update: Update, context):
     help_text = (
         "Help\n"
         "- /ai - Fetch latest AI news (last 12 hours)\n"
@@ -174,62 +176,66 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "News is ranked by source credibility, content engagement, and recency.\n"
         "Each news item is summarized to 100 characters."
     )
-    await update.message.reply_text(help_text)
+    update.message.reply_text(help_text)
 
 
-async def ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    status_message = await update.message.reply_text("Fetching latest AI news...")
+def ai_command(update: Update, context):
+    update.message.reply_text("Fetching latest AI news...")
     
     try:
         articles = fetch_ai_news(max_results=20)
         
         message = format_news_message(articles, limit=10)
-        await status_message.edit_text(message)
+        context.bot.edit_message_text(
+            chat_id=update.message.chat_id,
+            message_id=update.message.message_id + 1,
+            text=message
+        )
         
     except Exception as e:
         logger.error(f"Error in /ai command: {e}")
-        await status_message.edit_text(
-            "Error fetching news. Please try again later."
+        context.bot.edit_message_text(
+            chat_id=update.message.chat_id,
+            message_id=update.message.message_id + 1,
+            text="Error fetching news. Please try again later."
         )
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+def handle_message(update: Update, context):
+    update.message.reply_text(
         "I only understand commands. Try /ai to get AI news!"
     )
 
 
-async def run_bot():
+def main():
     print("Starting AI News Bot...")
+    print(f"Python: {sys.version}")
     print(f"TELEGRAM_BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}")
     print(f"NEWSDATA_API_KEY set: {bool(NEWSDATA_API_KEY)}")
     
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not set!")
         print("Error: Please set TELEGRAM_BOT_TOKEN environment variable")
-        import sys; sys.exit(1)
+        sys.exit(1)
     
     if not NEWSDATA_API_KEY:
         logger.error("NEWSDATA_API_KEY not set!")
         print("Error: Please set NEWSDATA_API_KEY environment variable")
-        import sys; sys.exit(1)
+        sys.exit(1)
     
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
+    dispatcher = updater.dispatcher
     
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("ai", ai_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    dispatcher.add_handler(CommandHandler("start", start_command))
+    dispatcher.add_handler(CommandHandler("help", help_command))
+    dispatcher.add_handler(CommandHandler("ai", ai_command))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
     
     logger.info("Bot started!")
     print("Bot is running...")
     
-    await application.run_polling(poll_interval=1.0)
-
-
-def main():
-    import asyncio
-    asyncio.run(run_bot())
+    updater.start_polling(poll_interval=1.0)
+    updater.idle()
 
 
 if __name__ == "__main__":
