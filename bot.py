@@ -5,9 +5,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
 import requests
-import telegram
-from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+import telebot
 
 print(f"Python version: {sys.version}")
 
@@ -27,6 +25,8 @@ AI_KEYWORDS = (
     '"LLM" OR "GPT" OR "OpenAI" OR "Claude" OR "Gemini" OR '
     '"neural network" OR "deep learning" OR "AGI" OR "generative AI"'
 )
+
+bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
 
 def fetch_ai_news(max_results: int = 20) -> List[Dict[str, Any]]:
@@ -154,7 +154,8 @@ def format_news_message(articles: List[Dict[str, Any]], limit: int = 10) -> str:
     return message
 
 
-def start_command(update: Update, context):
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
     welcome_text = (
         "Welcome to AI News Bot!\n\n"
         "I fetch the latest AI news from around the world, "
@@ -164,10 +165,11 @@ def start_command(update: Update, context):
         "- /help - Show this help\n\n"
         "Let's go!"
     )
-    update.message.reply_text(welcome_text)
+    bot.reply_to(message, welcome_text)
 
 
-def help_command(update: Update, context):
+@bot.message_handler(commands=['help'])
+def send_help(message):
     help_text = (
         "Help\n"
         "- /ai - Fetch latest AI news (last 12 hours)\n"
@@ -176,35 +178,27 @@ def help_command(update: Update, context):
         "News is ranked by source credibility, content engagement, and recency.\n"
         "Each news item is summarized to 100 characters."
     )
-    update.message.reply_text(help_text)
+    bot.reply_to(message, help_text)
 
 
-def ai_command(update: Update, context):
-    update.message.reply_text("Fetching latest AI news...")
+@bot.message_handler(commands=['ai'])
+def send_ai_news(message):
+    bot.reply_to(message, "Fetching latest AI news...")
     
     try:
         articles = fetch_ai_news(max_results=20)
         
-        message = format_news_message(articles, limit=10)
-        context.bot.edit_message_text(
-            chat_id=update.message.chat_id,
-            message_id=update.message.message_id + 1,
-            text=message
-        )
+        message_text = format_news_message(articles, limit=10)
+        bot.reply_to(message, message_text)
         
     except Exception as e:
         logger.error(f"Error in /ai command: {e}")
-        context.bot.edit_message_text(
-            chat_id=update.message.chat_id,
-            message_id=update.message.message_id + 1,
-            text="Error fetching news. Please try again later."
-        )
+        bot.reply_to(message, "Error fetching news. Please try again later.")
 
 
-def handle_message(update: Update, context):
-    update.message.reply_text(
-        "I only understand commands. Try /ai to get AI news!"
-    )
+@bot.message_handler(func=lambda m: True)
+def echo_message(message):
+    bot.reply_to(message, "I only understand commands. Try /ai to get AI news!")
 
 
 def main():
@@ -223,19 +217,10 @@ def main():
         print("Error: Please set NEWSDATA_API_KEY environment variable")
         sys.exit(1)
     
-    updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
-    dispatcher = updater.dispatcher
-    
-    dispatcher.add_handler(CommandHandler("start", start_command))
-    dispatcher.add_handler(CommandHandler("help", help_command))
-    dispatcher.add_handler(CommandHandler("ai", ai_command))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-    
     logger.info("Bot started!")
     print("Bot is running...")
     
-    updater.start_polling(poll_interval=1.0)
-    updater.idle()
+    bot.infinity_polling(timeout=60, long_polling_timeout=60)
 
 
 if __name__ == "__main__":

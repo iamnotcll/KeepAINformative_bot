@@ -3,8 +3,7 @@ services:
     name: ai-news-bot
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python3.11 bot.py
-    pythonVersion: "3.11"
+    startCommand: python bot.py
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         value: "8655208949:AAF9pYe3QpGiuf0U0a4_6Aeb6m6vKBh2-uw"
