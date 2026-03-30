@@ -183,9 +183,9 @@ def send_help(message):
 
 @bot.message_handler(commands=['ai'])
 def send_ai_news(message):
-    bot.reply_to(message, "Fetching latest AI news...")
-    
     try:
+        bot.reply_to(message, "Fetching latest AI news...")
+        
         articles = fetch_ai_news(max_results=20)
         
         message_text = format_news_message(articles, limit=10)
@@ -193,7 +193,10 @@ def send_ai_news(message):
         
     except Exception as e:
         logger.error(f"Error in /ai command: {e}")
-        bot.reply_to(message, "Error fetching news. Please try again later.")
+        try:
+            bot.reply_to(message, "Error fetching news. Please try again later.")
+        except:
+            pass
 
 
 @bot.message_handler(func=lambda m: True)
@@ -220,7 +223,14 @@ def main():
     logger.info("Bot started!")
     print("Bot is running...")
     
-    bot.infinity_polling(timeout=60, long_polling_timeout=60)
+    while True:
+        try:
+            bot.infinity_polling(timeout=60, long_polling_timeout=60)
+        except Exception as e:
+            logger.error(f"Polling error: {e}")
+            print(f"Polling error: {e}")
+            import time
+            time.sleep(5)
 
 
 if __name__ == "__main__":
