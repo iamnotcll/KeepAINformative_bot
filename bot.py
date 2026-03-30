@@ -199,7 +199,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-def main():
+async def run_bot():
     print("Starting AI News Bot...")
     print(f"TELEGRAM_BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}")
     print(f"NEWSDATA_API_KEY set: {bool(NEWSDATA_API_KEY)}")
@@ -222,9 +222,14 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     logger.info("Bot started!")
-    print("Bot is running... Press Ctrl+C to stop")
+    print("Bot is running...")
     
-    application.run_polling(poll_interval=1.0)
+    await application.run_polling(poll_interval=1.0)
+
+
+def main():
+    import asyncio
+    asyncio.run(run_bot())
 
 
 if __name__ == "__main__":
