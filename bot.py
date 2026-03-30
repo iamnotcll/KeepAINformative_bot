@@ -29,7 +29,7 @@ def fetch_ai_news(max_results: int = 20) -> List[Dict[str, Any]]:
     from datetime import datetime, timedelta
     
     now = datetime.now()
-    from_date = (now - timedelta(hours=12)).strftime("%Y-%m-%d %H:%M:%S")
+    from_date = (now - timedelta(hours=12)).strftime("%Y-%m-%d")
     
     params = {
         "apikey": NEWSDATA_API_KEY,
@@ -39,16 +39,20 @@ def fetch_ai_news(max_results: int = 20) -> List[Dict[str, Any]]:
         "country": "us,gb,ca,au",
         "from_date": from_date,
         "size": max_results,
-        "image": 1,
     }
     
-    response = requests.get(NEWS_API_URL, params=params, timeout=30)
-    response.raise_for_status()
+    try:
+        response = requests.get(NEWS_API_URL, params=params, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        logger.error(f"API request failed: {e}")
+        print(f"API request failed: {e}")
+        return []
     
-    data = response.json()
-    
-    if data.get("status") != "ok":
+    if data.get("status") not in ("ok", "success"):
         logger.error(f"API error: {data}")
+        print(f"API error: {data}")
         return []
     
     return data.get("results", [])
@@ -196,15 +200,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    print("Starting AI News Bot...")
+    print(f"TELEGRAM_BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}")
+    print(f"NEWSDATA_API_KEY set: {bool(NEWSDATA_API_KEY)}")
+    
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not set!")
         print("Error: Please set TELEGRAM_BOT_TOKEN environment variable")
-        return
+        import sys; sys.exit(1)
     
     if not NEWSDATA_API_KEY:
         logger.error("NEWSDATA_API_KEY not set!")
         print("Error: Please set NEWSDATA_API_KEY environment variable")
-        return
+        import sys; sys.exit(1)
     
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
