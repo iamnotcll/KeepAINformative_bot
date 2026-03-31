@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import threading
@@ -26,10 +27,14 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "sk-rizvilrtphnzdusxuldevvueensntaqjzcubsusymxeumxdo")
 
 AI_RSS_FEEDS = [
-    "https://feeds.feedburner.com/TechCrunch/",
+    "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",
+    "https://feeds.bbci.co.uk/news/technology/rss.xml",
     "https://www.theverge.com/rss/index.xml",
     "https://wired.com/feed/rss",
     "https://www.engadget.com/rss.xml",
+    "https://venturebeat.com/feed/",
+    "https://techcrunch.com/feed/",
+    "https://www.artificialintelligence-news.com/feed/",
 ]
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
@@ -71,22 +76,36 @@ def fetch_rss_news():
 def scrape_article_content(url: str) -> str:
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
         }
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        for script in soup(["script", "style", "nav", "footer", "header"]):
-            script.decompose()
+        for element in soup(["script", "style", "nav", "footer", "header", "aside", "iframe", "noscript"]):
+            element.decompose()
         
-        text = soup.get_text(separator="\n", strip=True)
+        article = soup.find('article') or soup.find('main') or soup.find('div', class_=lambda x: x and 'content' in x.lower())
         
-        lines = [line.strip() for line in text.split("\n")]
-        text = "\n".join([line for line in lines if line])
+        if article:
+            text = article.get_text(separator=" ", strip=True)
+        else:
+            text = soup.get_text(separator=" ", strip=True)
         
-        return text[:2000]
+        text = re.sub(r'\s+', ' ', text)
+        
+        sentences = text.split('. ')
+        meaningful_sentences = []
+        for s in sentences:
+            if len(s) > 30:
+                meaningful_sentences.append(s)
+        
+        text = '. '.join(meaningful_sentences[:15])
+        
+        return text[:3000]
     
     except Exception as e:
         logger.error(f"Scraper error: {e}")
@@ -95,34 +114,31 @@ def scrape_article_content(url: str) -> str:
 
 
 def translate_and_analyze(title: str, content: str) -> Dict[str, str]:
-    prompt = f"""你是一个专业的AI新闻分析师。请完成以下任务：
+    prompt = f"""你是一位资深的AI行业分析师。请仔细阅读以下新闻，然后：
 
-1. 将以下新闻标题翻译成中文
-2. 分析这条新闻对以下三个群体的影响（每个不超过100字）：
-   - 对AI相关股市的影响
-   - 对AI学习者的影响  
-   - 对AI行业从业者的影响
+1. 将新闻标题精练地翻译成中文（不超过20字）
+2. 用50字以内分析对AI股市的影响（关注相关股票涨跌、行业信心）
+3. 用50字以内分析对AI学习者的影响（关注技能需求、学习方向）
+4. 用50字以内分析对AI从业者的影响（关注岗位变化、技术趋势）
 
 新闻标题：{title}
-新闻内容：{content[:1000]}
+新闻内容：{content[:1500]}
 
-请用以下格式回复：
+严格按照这个格式回复（不要有任何额外内容）：
 翻译：[中文标题]
-
-股市影响：[分析]
-学习影响：[分析]
-从业影响：[分析]
-"""
+股市：[分析]
+学习：[分析]
+从业：[分析]"""
 
     try:
         response = client.chat.completions.create(
-            model="Qwen/Qwen2.5-7B-Instruct",
+            model="Qwen/Qwen2.5-14B-Instruct",
             messages=[
-                {"role": "system", "content": "你是一个专业的AI新闻分析师。"},
+                {"role": "system", "content": "你是一位资深的AI行业分析师，擅长分析AI新闻对不同群体的影响。"},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.7,
-            max_tokens=500
+            temperature=0.5,
+            max_tokens=400
         )
         
         result = response.choices[0].message.content
@@ -179,42 +195,32 @@ def format_news_message(articles: List[Dict[str, Any]]) -> str:
     if not articles:
         return "No AI news found. Please try again later."
     
-    message = "AI News \n"
-    message += "=" * 40 + "\n\n"
+    message = "🤖 AI News Daily\n"
+    message += "=" * 35 + "\n\n"
     
     for i, article in enumerate(articles, 1):
-        title = article.get("title", "No title")
-        translation = article.get("translation", title)
+        translation = article.get("translation", article.get("title", ""))
         
-        content = article.get("content", "")
-        if len(content) > 200:
-            content = content[:200] + "..."
-        
-        stock = article.get("stock_impact", "")
-        learner = article.get("learner_impact", "")
-        practitioner = article.get("practitioner_impact", "")
+        stock = article.get("stock_impact", "").strip()
+        learner = article.get("learner_impact", "").strip()
+        practitioner = article.get("practitioner_impact", "").strip()
         
         source = article.get("source", "Unknown")
         
-        message += f"【{i}】{translation}\n"
-        message += f"原文: {title}\n\n"
-        
-        if content:
-            message += f": {content}\n\n"
+        message += f"{i}. {translation}\n"
         
         if stock:
-            message += f": {stock}\n"
+            message += f"   📈 {stock}\n"
         if learner:
-            message += f": {learner}\n"
+            message += f"   📚 {learner}\n"
         if practitioner:
-            message += f": {practitioner}\n"
+            message += f"   💼 {practitioner}\n"
         
-        message += f": {source}\n"
-        message += "-" * 40 + "\n\n"
+        message += f"   📰 {source}\n"
+        message += "\n"
     
-    message += "/ai - \n"
-    message += "/subscribe - \n"
-    message += "/unsubscribe - "
+    message += "-" * 35 + "\n"
+    message += "/ai - 刷新 | /subscribe - 订阅每日"
     
     return message
 
